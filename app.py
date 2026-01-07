@@ -453,72 +453,104 @@ def calculate_cagr(start_value, end_value, years):
     except:
         return 0
 
-# ==================== AI 분석 함수 ====================
-def create_analysis_prompt(ticker_data, fundamental_data, cagr_data):
-    """AI 분석용 프롬프트 생성"""
-    ticker = ticker_data['Ticker']
-    company = ticker_data['Company']
+# ==================== AI 분석 함수 (Dual Engine 고도화) ====================
+
+def get_market_summary_prompt(df_results):
+    """시장 종합 분석용 프롬프트 생성"""
+    
+    # 데이터 집계
+    total_count = len(df_results)
+    above_vwap = len(df_results[df_results['Is_Above_VWAP'] == True])
+    avg_score = df_results['Buy_Signal_Score'].mean()
+    
+    top_performers = df_results.head(3)['Ticker'].tolist()
+    weak_performers = df_results.tail(3)['Ticker'].tolist()
+    
+    # 주식 vs 코인 성과 비교
+    stock_return = df_results[df_results['Type'] == 'Stock']['Quarter_Return_%'].mean()
+    crypto_return = df_results[df_results['Type'] == 'Crypto']['Quarter_Return_%'].mean() # BTC
     
     prompt = f"""
-당신은 월스트리트의 최고 애널리스트입니다. 다음 데이터를 바탕으로 {ticker} ({company})에 대한 심층 투자 분석을 제공하세요.
+    당신은 월스트리트의 수석 전략가(Chief Strategist)입니다. 
+    아래 'MAG 9 (미국 빅테크 7 + 코인베이스 + 비트코인)' 시장 데이터를 바탕으로 거시적인 시장 분석 리포트를 작성하세요.
 
-## 기술적 분석 데이터
-- 현재가: ${ticker_data['Current_Price']}
-- Anchored VWAP: ${ticker_data['Anchored_VWAP']}
-- VWAP 대비: {ticker_data['Price_vs_VWAP_%']:+.2f}%
-- 분기 수익률: {ticker_data['Quarter_Return_%']:+.2f}%
-- 매수 신호 점수: {ticker_data.get('Buy_Signal_Score', 'N/A')}/100
-- VWAP 위 거래일 비율: {ticker_data['Above_VWAP_Days_%']}%
-- 추세 강도: {ticker_data['Uptrend_Strength_%']}%
+    ## 시장 데이터 요약
+    - 분석 시점: {datetime.now().strftime('%Y-%m-%d')}
+    - 전체 자산 수: {total_count}개 중 {above_vwap}개가 VWAP(추세) 위에 있음 (강세장 여부 판단 기준)
+    - 평균 매수 강도 점수: {avg_score:.1f}/100
+    - 주식 평균 수익률: {stock_return:.2f}% vs 비트코인 수익률: {crypto_return:.2f}%
+    - 선도주(Top 3): {', '.join(top_performers)}
+    - 약세주(Bottom 3): {', '.join(weak_performers)}
 
-## 펀더멘털 데이터
-{fundamental_data if fundamental_data else "주식이 아닌 자산"}
-
-## 5개년 성장률 (CAGR)
-{cagr_data if cagr_data else "데이터 없음"}
-
-다음 항목에 대해 분석하세요:
-
-1. **투자 매력도 평가** (1-10점)
-2. **핵심 강점 3가지**
-3. **주요 리스크 3가지**
-4. **목표가 및 투자 전략** (단기/중기/장기)
-5. **한 줄 요약**
-
-간결하고 명확하게 작성해주세요.
-"""
+    ## 분석 요구사항 (반드시 한국어로 작성)
+    1. **시장 국면 진단**: 현재 시장이 위험 선호(Risk-On)인지 회피(Risk-Off)인지 진단하고 근거를 제시하세요.
+    2. **자금 흐름 분석**: 빅테크(주식)와 암호화폐 간의 자금 이동이나 디커플링 현상이 보이는지 분석하세요.
+    3. **섹터 로테이션**: 선도주와 약세주를 통해 현재 시장이 어떤 테마(예: AI, 금리 인하 기대 등)에 주목하는지 설명하세요.
+    4. **포트폴리오 전략**: 현재 시점에서 주식과 암호화폐의 이상적인 비중 조절(Rebalancing) 의견을 제시하세요.
+    
+    결론은 명확하고 직설적으로 작성하세요.
+    """
     return prompt
 
-def analyze_with_openai(prompt):
-    """OpenAI GPT-4로 분석"""
-    if not OPENAI_API_KEY:
-        return "OpenAI API 키가 설정되지 않았습니다."
+def get_single_stock_prompt(ticker_data, fundamental_data, cagr_data):
+    """개별 종목 Deep Dive용 프롬프트 생성"""
+    ticker = ticker_data['Ticker']
     
+    prompt = f"""
+    당신은 전설적인 퀀트 트레이더이자 펀더멘털 분석가입니다.
+    다음 데이터를 바탕으로 '{ticker}'에 대한 심층 투자 보고서를 작성하세요.
+
+    ## 1. 기술적 분석 (Anchored VWAP 기준)
+    - 현재가: ${ticker_data['Current_Price']}
+    - Anchored VWAP: ${ticker_data['Anchored_VWAP']} (지지/저항 라인)
+    - VWAP 괴리율: {ticker_data['Price_vs_VWAP_%']:+.2f}%
+    - 추세 강도: {ticker_data['Uptrend_Strength_%']}/100
+    - 매수 신호 점수: {ticker_data['Buy_Signal_Score']}/100
+
+    ## 2. 펀더멘털 및 성장성
+    {fundamental_data if fundamental_data else "정보 없음"}
+    {cagr_data if cagr_data else "성장률 데이터 없음"}
+
+    ## 분석 요구사항 (반드시 한국어로 작성)
+    1. **트레이딩 셋업 (시나리오)**:
+       - **Bull Case (상승)**: 진입 적정가와 1차 목표가를 구체적 숫자로 제시.
+       - **Bear Case (하락)**: VWAP 이탈 시 손절(Stop Loss) 라인과 하방 지지선 제시.
+    
+    2. **펀더멘털/성장성 평가**:
+       - 현재 밸류에이션(PER, PBR 등)이 성장률(CAGR) 대비 정당화 가능한지 분석 (PEG 관점).
+    
+    3. **리스크 요인**:
+       - 이 종목이 가진 가장 치명적인 약점 2가지를 지적하세요.
+    
+    4. **최종 투자의견**: 
+       - [강력 매수 / 분할 매수 / 관망 / 매도] 중 하나를 선택하고 이유를 한 문장으로 요약하세요.
+    """
+    return prompt
+
+def call_openai_api(prompt):
+    if not OPENAI_ENABLED: return "OpenAI API 키가 없습니다."
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
+        response = OPENAI_CLIENT.chat.completions.create(
+            model=OPENAI_MODEL_MARKET,
             messages=[
-                {"role": "system", "content": "당신은 월스트리트 최고의 투자 애널리스트입니다."},
+                {"role": "system", "content": "너는 냉철하고 분석적인 전문 투자 자문가다. 서론/본론/결론 형식을 갖춰라."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=1500,
             temperature=0.7
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"OpenAI 분석 실패: {str(e)}"
+        return f"OpenAI 오류: {str(e)}"
 
-def analyze_with_gemini(prompt):
-    """Gemini로 분석"""
-    if not GEMINI_API_KEY:
-        return "Gemini API 키가 설정되지 않았습니다."
-    
+def call_gemini_api(prompt):
+    if not GEMINI_ENABLED: return "Gemini API 키가 없습니다."
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash') # 모델명 확인 필요 (gemini-pro 또는 gemini-1.5-flash 권장)
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Gemini 분석 실패: {str(e)}"
+        return f"Gemini 오류: {str(e)}"
+
 
 # ==================== 메인 앱 ====================
 st.title("🚀 MAG 9 (MAG 7 + COIN + BTC) AI 종합 분석")
@@ -914,58 +946,80 @@ if show_growth:
         
         st.plotly_chart(fig_cagr, use_container_width=True)
 
-# ==================== AI Deep Dive 분석 ====================
+
+# ==================== AI Deep Dive 분석 (Dual Engine) ====================
 if show_ai:
     st.markdown("---")
-    st.header("🤖 AI Deep Dive 분석")
-    
-    if not OPENAI_API_KEY and not GEMINI_API_KEY:
-        st.error("AI 분석을 위해서는 API 키가 필요합니다. Streamlit Secrets에서 설정해주세요.")
-    else:
-        top_n = df_results.head(top_n_analysis if 'top_n_analysis' in locals() else 3)
+    st.header("🤖 AI Deep Dive (Dual Engine)")
+    st.markdown("OpenAI(GPT-4)와 Google Gemini가 동시에 분석하여 교차 검증합니다.")
+
+    # 탭으로 분석 모드 분리
+    tab_market, tab_stock = st.tabs(["🌍 종합 시장 분석 (Macro)", "🔍 개별 종목 심층 분석 (Micro)"])
+
+    # 1. 종합 시장 분석 탭
+    with tab_market:
+        st.subheader("📊 MAG 9 시장 전체 브리핑")
+        st.info("MAG 9 전체 데이터(주식+코인)를 기반으로 시장의 흐름과 자금 이동을 분석합니다.")
         
-        for idx, row in top_n.iterrows():
-            ticker = row['Ticker']
-            rank = df_results.index.get_loc(idx) + 1
+        if st.button("🚀 종합 시장 분석 실행", type="primary", use_container_width=True):
+            market_prompt = get_market_summary_prompt(df_results)
             
-            if row['Type'] == 'Crypto':
-                icon = "₿"
-            elif ticker == 'COIN':
-                icon = "💰"
-            else:
-                icon = "📈"
+            col1, col2 = st.columns(2)
             
-            with st.expander(f"🤖 [{rank}] {icon} {ticker} - {row['Company']}", expanded=(rank == 1)):
-                # 펀더멘털 데이터 찾기
-                fund_data = None
-                if ticker in df_fundamental['Ticker'].values:
-                    fund_data = df_fundamental[df_fundamental['Ticker'] == ticker].to_dict('records')[0]
-                
-                # CAGR 데이터 찾기
-                cagr_data = None
-                if not df_cagr.empty and ticker in df_cagr['Ticker'].values:
-                    cagr_data = df_cagr[df_cagr['Ticker'] == ticker].to_dict('records')[0]
-                
-                # 프롬프트 생성
-                prompt = create_analysis_prompt(row.to_dict(), fund_data, cagr_data)
-                
-                col1, col2 = st.columns(2)
-                
-                # OpenAI 분석
-                if ai_engine in ["OpenAI GPT-4", "Both"]:
-                    with col1:
-                        st.markdown("### 🧠 OpenAI GPT-4 분석")
-                        with st.spinner("분석 중..."):
-                            openai_analysis = analyze_with_openai(prompt)
-                        st.markdown(openai_analysis)
-                
-                # Gemini 분석
-                if ai_engine in ["Google Gemini", "Both"]:
-                    with col2:
-                        st.markdown("### 🌟 Google Gemini 분석")
-                        with st.spinner("분석 중..."):
-                            gemini_analysis = analyze_with_gemini(prompt)
-                        st.markdown(gemini_analysis)
+            with col1:
+                st.markdown("### 🧠 OpenAI (Strategist)")
+                with st.spinner("OpenAI 분석 중..."):
+                    openai_res = call_openai_api(market_prompt)
+                    st.markdown(openai_res)
+            
+            with col2:
+                st.markdown("### 🌟 Gemini (Analyst)")
+                with st.spinner("Gemini 분석 중..."):
+                    gemini_res = call_gemini_api(market_prompt)
+                    st.markdown(gemini_res)
+
+    # 2. 개별 종목 심층 분석 탭
+    with tab_stock:
+        st.subheader("🔍 개별 자산 Deep Dive")
+        
+        # 종목 선택 (점수 높은 순으로 정렬)
+        sorted_tickers = df_results['Ticker'].tolist()
+        selected_ticker = st.selectbox("분석할 종목을 선택하세요:", sorted_tickers)
+        
+        if st.button(f"🚀 {selected_ticker} 심층 분석 실행", type="primary", use_container_width=True):
+            # 선택된 종목 데이터 준비
+            row = df_results[df_results['Ticker'] == selected_ticker].iloc[0]
+            
+            # 펀더멘털 데이터
+            fund_data = None
+            if not df_fundamental.empty and selected_ticker in df_fundamental['Ticker'].values:
+                fund_data = df_fundamental[df_fundamental['Ticker'] == selected_ticker].iloc[0].to_dict()
+            
+            # 성장률(CAGR) 데이터
+            cagr_data = None
+            if not df_cagr.empty and selected_ticker in df_cagr['Ticker'].values:
+                cagr_data = df_cagr[df_cagr['Ticker'] == selected_ticker].iloc[0].to_dict()
+            
+            # 프롬프트 생성
+            stock_prompt = get_single_stock_prompt(row.to_dict(), fund_data, cagr_data)
+            
+            # Dual Engine 실행
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"### 🧠 OpenAI 분석 ({selected_ticker})")
+                with st.spinner("OpenAI가 차트와 장부를 분석 중..."):
+                    stock_res_openai = call_openai_api(stock_prompt)
+                    st.success("OpenAI 분석 완료")
+                    st.markdown(stock_res_openai)
+            
+            with col2:
+                st.markdown(f"### 🌟 Gemini 분석 ({selected_ticker})")
+                with st.spinner("Gemini가 데이터를 크로스체크 중..."):
+                    stock_res_gemini = call_gemini_api(stock_prompt)
+                    st.success("Gemini 분석 완료")
+                    st.markdown(stock_res_gemini)
+
 
 # ==================== 투자 전략 요약 ====================
 st.markdown("---")
