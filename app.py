@@ -481,6 +481,7 @@ st.info(f"""
 """)
 
 # ==================== 기술적 분석 ====================
+# ==================== 기술적 분석 ====================
 if show_technical:
     st.markdown("---")
     st.header("📈 기술적 분석 (Anchored VWAP)")
@@ -491,17 +492,54 @@ if show_technical:
         
         progress_bar = st.progress(0)
         for idx, ticker in enumerate(all_tickers):
+            # 1. VWAP 분석 데이터 가져오기
             result = get_quarterly_vwap_analysis(ticker)
+            
+            # 2. 데이터가 성공적으로 수집되었을 경우, 자산 정보(Type, Description 등) 병합
             if result:
+                asset_info = MAG9_ASSETS.get(ticker, {})
+                result['Type'] = asset_info.get('type', 'Stock')
+                result['Description'] = asset_info.get('description', '')
+                # Market_Cap이 yfinance info에 없는 경우를 대비 (Crypto 등)
+                if 'Market_Cap' not in result:
+                     result['Market_Cap'] = 0 
                 results.append(result)
+            
             progress_bar.progress((idx + 1) / len(all_tickers))
         
+        progress_bar.empty()
+        
+        # [수정 핵심 1] 결과 리스트가 비어있는지 확인 (방어 코드)
+        if not results:
+            st.error("❌ 데이터를 가져오지 못했습니다.")
+            st.warning("""
+            **가능한 원인:**
+            1. Yahoo Finance API 호출 제한 (잠시 후 다시 시도하세요)
+            2. 인터넷 연결 문제
+            3. 연초(1월 초)라 거래일 데이터 부족 (get_quarterly_vwap_analysis 함수 확인 필요)
+            """)
+            st.stop() # 이후 코드 실행 중단
+
         df_results = pd.DataFrame(results)
-        df_results['Buy_Signal_Score'] = df_results.apply(calculate_buy_score, axis=1)
-        df_results = df_results.sort_values('Buy_Signal_Score', ascending=False)
-        df_results['Market_Cap_Trillion'] = (df_results['Market_Cap'] / 1e12).round(3)
-    
+
+        # [수정 핵심 2] 데이터프레임 생성 후 점수 계산
+        try:
+            df_results['Buy_Signal_Score'] = df_results.apply(calculate_buy_score, axis=1)
+            df_results = df_results.sort_values('Buy_Signal_Score', ascending=False)
+            
+            # 시가총액 조(Trillion) 단위 변환 (에러 방지용 fillna 추가)
+            df_results['Market_Cap'] = df_results['Market_Cap'].fillna(0)
+            df_results['Market_Cap_Trillion'] = (df_results['Market_Cap'] / 1e12).round(3)
+            
+        except Exception as e:
+            st.error(f"데이터 계산 중 오류 발생: {e}")
+            st.stop()
+
     st.success("✓ 데이터 수집 완료!")
+    
+    # ... (이하 코드 동일)
+
+
     
     # 상위 3개 종목 카드
     st.subheader("🏆 TOP 3 추천 종목")
