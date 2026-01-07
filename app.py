@@ -196,7 +196,7 @@ def calculate_anchored_vwap(df):
 
 @st.cache_data(ttl=1800)
 def get_quarterly_vwap_analysis(ticker):
-    """분기별 Anchored VWAP 분석"""
+    """분기별 Anchored VWAP 분석 (수정됨)"""
     try:
         quarter_start = get_current_quarter_start()
         end_date = datetime.now()
@@ -205,7 +205,8 @@ def get_quarterly_vwap_analysis(ticker):
         stock = yf.Ticker(ticker)
         df = stock.history(start=quarter_start, end=end_date)
 
-        if df.empty or len(df) < 5:
+        # [수정 중요] 분기 초반에는 데이터가 적으므로 최소 개수 조건을 5개 -> 1개로 완화
+        if df.empty or len(df) < 1:
             return None
 
         df = calculate_anchored_vwap(df)
@@ -213,10 +214,13 @@ def get_quarterly_vwap_analysis(ticker):
         current_price = df['Close'].iloc[-1]
         current_vwap = df['Anchored_VWAP'].iloc[-1]
         above_vwap_ratio = (df['Close'] > df['Anchored_VWAP']).sum() / len(df) * 100
+        
+        # 데이터가 적을 경우 있는 만큼만 평균 계산
         recent_5days_avg = df['Close'].tail(5).mean()
         recent_10days_avg = df['Close'].tail(10).mean()
 
         recent_20 = df['Close'].tail(min(20, len(df)))
+        # 데이터가 너무 적으면(1개) 추세 강도 계산 불가하므로 50(중립)으로 처리
         uptrend_strength = (recent_20.diff() > 0).sum() / len(recent_20) * 100 if len(recent_20) > 1 else 50
 
         recent_volume = df['Volume'].tail(5).mean()
@@ -256,9 +260,9 @@ def get_quarterly_vwap_analysis(ticker):
         }
 
     except Exception as e:
-        st.error(f"Error processing {ticker}: {str(e)}")
+        # 에러 확인을 위해 st.error 대신 print로 로그만 남기거나 무시
+        print(f"Error processing {ticker}: {str(e)}")
         return None
-
 def calculate_buy_score(row):
     """매수 신호 점수 계산"""
     score = 0
