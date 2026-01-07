@@ -206,15 +206,13 @@ MAG9_ASSETS = {
         'type': 'Crypto'
     }
 }
+# ==================== 핵심 함수 (순서 중요) ====================
 
-# ==================== 핵심 함수 ====================
-# ==================== 날짜 계산 로직 수정 (핵심 해결책) ====================
 @st.cache_data(ttl=3600)
 def get_current_quarter_start():
     """
-    현재 분기 시작일 계산 (수정됨)
-    - 분기 시작 후 15일이 지나지 않았다면 '이전 분기 시작일'을 반환합니다.
-    - 예: 1월 7일이라면, 1월 1일 대신 작년 10월 1일을 반환하여 충분한 데이터를 확보함.
+    현재 분기 시작일 계산 (날짜 보정 로직 포함)
+    - 1월 초(15일 이전)인 경우 데이터 확보를 위해 작년 4분기로 설정
     """
     now = datetime.now()
     
@@ -226,7 +224,7 @@ def get_current_quarter_start():
     # 2. 현재 날짜와 분기 시작일 차이 계산
     days_diff = (now - current_q_start).days
     
-    # 3. 분기 시작한 지 15일 미만이면 이전 분기로 설정
+    # 3. 분기 시작한 지 15일 미만이면 이전 분기로 설정 (데이터 부족 방지)
     if days_diff < 15:
         if quarter_start_month == 1: # 1월이면 작년 10월로
             return datetime(now.year - 1, 10, 1)
@@ -234,6 +232,23 @@ def get_current_quarter_start():
             return datetime(now.year, quarter_start_month - 3, 1)
             
     return current_q_start
+
+def calculate_anchored_vwap(df):
+    """
+    Anchored VWAP 계산 함수 (이 함수가 누락되어 에러가 발생했음)
+    """
+    df = df.copy()
+    # 고가, 저가, 종가의 평균 (Typical Price)
+    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    # 거래량 가중 가격
+    df['TP_Volume'] = df['Typical_Price'] * df['Volume']
+    # 누적 값 계산
+    df['Cumulative_TP_Volume'] = df['TP_Volume'].cumsum()
+    df['Cumulative_Volume'] = df['Volume'].cumsum()
+    # VWAP 도출
+    df['Anchored_VWAP'] = df['Cumulative_TP_Volume'] / df['Cumulative_Volume']
+    return df
+
 @st.cache_data(ttl=1800)
 def get_quarterly_vwap_analysis(ticker):
     """분기별 Anchored VWAP 분석 (디버깅 모드)"""
@@ -248,28 +263,18 @@ def get_quarterly_vwap_analysis(ticker):
     # 2. 데이터 가져오기 (yfinance)
     try:
         stock = yf.Ticker(ticker)
-        # auto_adjust=False로 설정하여 원본 컬럼(Adj Close 등) 확인
-        df = stock.history(start=quarter_start, end=end_date, auto_adjust=False)
+        # auto_adjust=True로 하면 수정주가가 반영됨
+        df = stock.history(start=quarter_start, end=end_date, auto_adjust=True)
         
         # 데이터가 없으면 기간을 늘려서 재시도
         if df.empty:
-            st.warning(f"⚠️ [{ticker}] 1차 수집 실패. 기간을 늘려 재시도합니다.")
-            df = stock.history(start=quarter_start - timedelta(days=10), end=end_date, auto_adjust=False)
+            df = stock.history(start=quarter_start - timedelta(days=10), end=end_date, auto_adjust=True)
 
         if df.empty:
-            st.error(f"❌ [{ticker}] 데이터 수집 실패: 데이터가 비어있습니다. (Yahoo API 응답 없음)")
+            # 에러 메시지 대신 None 반환하여 조용히 넘어가거나 로그만 출력
+            print(f"[{ticker}] 데이터 수집 실패: 데이터가 비어있습니다.")
             return None
             
-        # 컬럼 이름 정리 (Close vs Adj Close)
-        if 'Adj Close' in df.columns:
-            df['Close'] = df['Adj Close'] # 수정주가를 Close로 사용
-            
-        # 필수 컬럼 확인
-        required_cols = ['High', 'Low', 'Close', 'Volume']
-        if not all(col in df.columns for col in required_cols):
-             st.error(f"❌ [{ticker}] 데이터 컬럼 누락. 보유 컬럼: {df.columns.tolist()}")
-             return None
-
     except Exception as e:
         st.error(f"❌ [{ticker}] yfinance 호출 오류: {e}")
         return None
@@ -280,7 +285,7 @@ def get_quarterly_vwap_analysis(ticker):
         if len(df) < 1:
             return None
             
-        # VWAP 계산
+        # [중요] 여기서 위에서 정의한 함수를 호출합니다
         df = calculate_anchored_vwap(df)
         
         current_price = df['Close'].iloc[-1]
@@ -290,12 +295,6 @@ def get_quarterly_vwap_analysis(ticker):
         len_df = len(df)
         
         above_vwap_ratio = (df['Close'] > df['Anchored_VWAP']).sum() / len_df * 100
-        
-        recent_5 = df['Close'].tail(5)
-        recent_5days_avg = recent_5.mean()
-        
-        recent_10 = df['Close'].tail(10)
-        recent_10days_avg = recent_10.mean()
         
         recent_20 = df['Close'].tail(min(20, len_df))
         if len(recent_20) > 1:
@@ -343,10 +342,7 @@ def get_quarterly_vwap_analysis(ticker):
 
     except Exception as e:
         st.error(f"❌ [{ticker}] 지표 계산 중 오류: {e}")
-        # 상세 에러 확인을 위해 콘솔에도 출력
-        print(f"Error checking {ticker}: {e}")
         return None
-
 
 def calculate_buy_score(row):
     """매수 신호 점수 계산"""
