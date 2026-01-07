@@ -12,6 +12,22 @@ import google.generativeai as genai
 
 warnings.filterwarnings('ignore')
 
+
+# OpenAI와 Gemini 임포트 (선택적)
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
+
+
 # 페이지 설정
 st.set_page_config(
     page_title="MAG 9 AI 종합 분석",
@@ -19,6 +35,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
 # ==================== 로그인 시스템 (수정됨) ====================
 def check_password():
     """비밀번호 확인 및 로그인 상태 관리"""
@@ -54,16 +72,31 @@ def check_password():
 if not check_password():
     st.stop()
 
-# ==================== API 키 설정 ====================
+# ==================== AI 설정 ====================
+# Gemini 초기화
+GEMINI_ENABLED = False
 try:
-    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    openai.api_key = OPENAI_API_KEY
-    genai.configure(api_key=GEMINI_API_KEY)
-except:
-    st.warning("⚠️ API 키가 설정되지 않았습니다. AI 분석 기능이 제한됩니다.")
-    OPENAI_API_KEY = None
-    GEMINI_API_KEY = None
+    if "GEMINI_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        GEMINI_ENABLED = True
+except Exception as e:
+    st.warning(f"⚠️ Gemini AI 초기화 실패: {e}")
+
+# OpenAI 초기화
+OPENAI_ENABLED = False
+OPENAI_CLIENT = None
+
+try:
+    if "OPENAI_API_KEY" in st.secrets:
+        OPENAI_CLIENT = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        OPENAI_ENABLED = True
+except Exception as e:
+    st.warning(f"⚠️ OpenAI 초기화 실패: {e}")
+
+# 모델 설정
+OPENAI_MODEL_MARKET = st.secrets.get("OPENAI_MODEL_MARKET", "gpt-4o-mini")
+OPENAI_MODEL_STOCK = st.secrets.get("OPENAI_MODEL_STOCK", "gpt-4o-mini")
+OPENAI_MODEL_CHAT = st.secrets.get("OPENAI_MODEL_CHAT", "gpt-4o-mini")
 
 # ==================== 사이드바 ====================
 with st.sidebar:
