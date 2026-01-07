@@ -208,86 +208,106 @@ MAG9_ASSETS = {
 }
 
 # ==================== 핵심 함수 ====================
+# ==================== 날짜 계산 로직 수정 (핵심 해결책) ====================
 @st.cache_data(ttl=3600)
 def get_current_quarter_start():
-    """현재 분기 시작일 계산"""
+    """
+    현재 분기 시작일 계산 (수정됨)
+    - 분기 시작 후 15일이 지나지 않았다면 '이전 분기 시작일'을 반환합니다.
+    - 예: 1월 7일이라면, 1월 1일 대신 작년 10월 1일을 반환하여 충분한 데이터를 확보함.
+    """
     now = datetime.now()
+    
+    # 1. 일단 현재 분기 시작일 계산
     quarter = (now.month - 1) // 3
     quarter_start_month = quarter * 3 + 1
-    quarter_start = datetime(now.year, quarter_start_month, 1)
-    return quarter_start
+    current_q_start = datetime(now.year, quarter_start_month, 1)
+    
+    # 2. 현재 날짜와 분기 시작일 차이 계산
+    days_diff = (now - current_q_start).days
+    
+    # 3. 분기 시작한 지 15일 미만이면 이전 분기로 설정
+    if days_diff < 15:
+        if quarter_start_month == 1: # 1월이면 작년 10월로
+            return datetime(now.year - 1, 10, 1)
+        else: # 아니면 3달 전으로
+            return datetime(now.year, quarter_start_month - 3, 1)
+            
+    return current_q_start
 
-def calculate_anchored_vwap(df):
-    """Anchored VWAP 계산"""
-    df = df.copy()
-    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['TP_Volume'] = df['Typical_Price'] * df['Volume']
-    df['Cumulative_TP_Volume'] = df['TP_Volume'].cumsum()
-    df['Cumulative_Volume'] = df['Volume'].cumsum()
-    df['Anchored_VWAP'] = df['Cumulative_TP_Volume'] / df['Cumulative_Volume']
-    return df
 @st.cache_data(ttl=1800)
 def get_quarterly_vwap_analysis(ticker):
-    """분기별 Anchored VWAP 분석 (수정됨: 최소 거래일 제한 완화)"""
+    """분기별 Anchored VWAP 분석 (데이터 확보 강화)"""
     try:
+        # 수정된 날짜 함수 사용
         quarter_start = get_current_quarter_start()
         end_date = datetime.now()
-                
+        
+        # Crypto(BTC)와 주식 구분하여 데이터 호출 최적화
         stock = yf.Ticker(ticker)
-        # auto_adjust=True로 설정하여 수정주가 반영
         df = stock.history(start=quarter_start, end=end_date, auto_adjust=True)
         
-        # [수정 핵심] 분기 초반에는 거래일이 적으므로 제한을 5일 -> 1일로 완화
+        # 데이터가 비어있으면 다시 시도 (기간을 5일 더 늘려서)
+        if df.empty:
+            df = stock.history(start=quarter_start - timedelta(days=5), end=end_date, auto_adjust=True)
+
+        # 그래도 없으면 None 반환
         if df.empty or len(df) < 1: 
             return None
         
+        # --- VWAP 계산 로직 (기존과 동일) ---
         df = calculate_anchored_vwap(df)
         
         current_price = df['Close'].iloc[-1]
         current_vwap = df['Anchored_VWAP'].iloc[-1]
         above_vwap_ratio = (df['Close'] > df['Anchored_VWAP']).sum() / len(df) * 100
         
-        # 이동평균 계산 시 데이터 부족 예외 처리
-        recent_5days_avg = df['Close'].tail(5).mean() if len(df) >= 5 else df['Close'].mean()
-        recent_10days_avg = df['Close'].tail(10).mean() if len(df) >= 10 else df['Close'].mean()
+        # 이동평균 (데이터 개수에 맞춰 유동적 계산)
+        len_df = len(df)
+        recent_5days_avg = df['Close'].tail(5).mean() if len_df >= 5 else df['Close'].mean()
+        recent_10days_avg = df['Close'].tail(10).mean() if len_df >= 10 else df['Close'].mean()
         
-        recent_20 = df['Close'].tail(min(20, len(df)))
+        recent_20 = df['Close'].tail(min(20, len_df))
         uptrend_strength = (recent_20.diff() > 0).sum() / len(recent_20) * 100 if len(recent_20) > 1 else 50
         
-        recent_volume = df['Volume'].tail(5).mean() if len(df) >= 5 else df['Volume'].mean()
+        recent_volume = df['Volume'].tail(5).mean() if len_df >= 5 else df['Volume'].mean()
         avg_volume = df['Volume'].mean()
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
         
-        info = stock.info
-        company_name = info.get('longName', ticker)
-        sector = info.get('sector', 'N/A')
+        # yfinance info에서 정보를 못 가져올 경우 대비 (안전장치)
+        try:
+            info = stock.info
+            company_name = info.get('longName', ticker)
+            sector = info.get('sector', 'N/A')
+            market_cap = info.get('marketCap', 0)
+        except:
+            company_name = ticker
+            sector = 'N/A'
+            market_cap = 0
         
         quarter_start_price = df['Close'].iloc[0]
         quarter_return = ((current_price - quarter_start_price) / quarter_start_price * 100)
         
-        quarter_num = (quarter_start.month - 1) // 3 + 1
+        # 화면에 표시할 분기 이름 (날짜 기준)
+        q_num = (quarter_start.month - 1) // 3 + 1
         
         return {
             'Ticker': ticker,
             'Company': company_name,
             'Sector': sector,
-            'Quarter': f'{quarter_start.year} Q{quarter_num}',
-            'Quarter_Start_Date': quarter_start.strftime('%Y-%m-%d'),
+            'Quarter': f'{quarter_start.year} Q{q_num}',
             'Trading_Days': len(df),
-            'Current_Price': round(current_price, 2),
-            'Anchored_VWAP': round(current_vwap, 2),
-            'Quarter_Start_Price': round(quarter_start_price, 2),
-            'Quarter_Return_%': round(quarter_return, 2),
-            'Price_vs_VWAP_%': round((current_price - current_vwap) / current_vwap * 100, 2),
-            'Above_VWAP_Days_%': round(above_vwap_ratio, 1),
-            'Recent_5D_Avg': round(recent_5days_avg, 2),
-            'Recent_10D_Avg': round(recent_10days_avg, 2),
-            'Uptrend_Strength_%': round(uptrend_strength, 1),
-            'Volume_Ratio': round(volume_ratio, 2),
-            'Is_Above_VWAP': current_price > current_vwap
+            'Current_Price': float(current_price),
+            'Anchored_VWAP': float(current_vwap),
+            'Quarter_Return_%': float(quarter_return),
+            'Price_vs_VWAP_%': float((current_price - current_vwap) / current_vwap * 100),
+            'Above_VWAP_Days_%': float(above_vwap_ratio),
+            'Uptrend_Strength_%': float(uptrend_strength),
+            'Volume_Ratio': float(volume_ratio),
+            'Is_Above_VWAP': bool(current_price > current_vwap),
+            'Market_Cap': market_cap # 시총 정보 추가
         }
     except Exception as e:
-        # 에러 로그를 출력하여 디버깅 용이하게 함
         print(f"Error processing {ticker}: {str(e)}")
         return None
 
