@@ -234,47 +234,80 @@ def get_current_quarter_start():
             return datetime(now.year, quarter_start_month - 3, 1)
             
     return current_q_start
-
 @st.cache_data(ttl=1800)
 def get_quarterly_vwap_analysis(ticker):
-    """분기별 Anchored VWAP 분석 (데이터 확보 강화)"""
+    """분기별 Anchored VWAP 분석 (디버깅 모드)"""
+    # 1. 날짜 계산
     try:
-        # 수정된 날짜 함수 사용
         quarter_start = get_current_quarter_start()
         end_date = datetime.now()
-        
-        # Crypto(BTC)와 주식 구분하여 데이터 호출 최적화
-        stock = yf.Ticker(ticker)
-        df = stock.history(start=quarter_start, end=end_date, auto_adjust=True)
-        
-        # 데이터가 비어있으면 다시 시도 (기간을 5일 더 늘려서)
-        if df.empty:
-            df = stock.history(start=quarter_start - timedelta(days=5), end=end_date, auto_adjust=True)
+    except Exception as e:
+        st.error(f"❌ [{ticker}] 날짜 계산 오류: {e}")
+        return None
 
-        # 그래도 없으면 None 반환
-        if df.empty or len(df) < 1: 
-            return None
+    # 2. 데이터 가져오기 (yfinance)
+    try:
+        stock = yf.Ticker(ticker)
+        # auto_adjust=False로 설정하여 원본 컬럼(Adj Close 등) 확인
+        df = stock.history(start=quarter_start, end=end_date, auto_adjust=False)
         
-        # --- VWAP 계산 로직 (기존과 동일) ---
+        # 데이터가 없으면 기간을 늘려서 재시도
+        if df.empty:
+            st.warning(f"⚠️ [{ticker}] 1차 수집 실패. 기간을 늘려 재시도합니다.")
+            df = stock.history(start=quarter_start - timedelta(days=10), end=end_date, auto_adjust=False)
+
+        if df.empty:
+            st.error(f"❌ [{ticker}] 데이터 수집 실패: 데이터가 비어있습니다. (Yahoo API 응답 없음)")
+            return None
+            
+        # 컬럼 이름 정리 (Close vs Adj Close)
+        if 'Adj Close' in df.columns:
+            df['Close'] = df['Adj Close'] # 수정주가를 Close로 사용
+            
+        # 필수 컬럼 확인
+        required_cols = ['High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required_cols):
+             st.error(f"❌ [{ticker}] 데이터 컬럼 누락. 보유 컬럼: {df.columns.tolist()}")
+             return None
+
+    except Exception as e:
+        st.error(f"❌ [{ticker}] yfinance 호출 오류: {e}")
+        return None
+
+    # 3. VWAP 및 지표 계산
+    try:
+        # 데이터 개수 체크 (최소 1개)
+        if len(df) < 1:
+            return None
+            
+        # VWAP 계산
         df = calculate_anchored_vwap(df)
         
         current_price = df['Close'].iloc[-1]
         current_vwap = df['Anchored_VWAP'].iloc[-1]
-        above_vwap_ratio = (df['Close'] > df['Anchored_VWAP']).sum() / len(df) * 100
         
-        # 이동평균 (데이터 개수에 맞춰 유동적 계산)
+        # 데이터가 1개뿐일 경우를 대비한 안전한 계산
         len_df = len(df)
-        recent_5days_avg = df['Close'].tail(5).mean() if len_df >= 5 else df['Close'].mean()
-        recent_10days_avg = df['Close'].tail(10).mean() if len_df >= 10 else df['Close'].mean()
+        
+        above_vwap_ratio = (df['Close'] > df['Anchored_VWAP']).sum() / len_df * 100
+        
+        recent_5 = df['Close'].tail(5)
+        recent_5days_avg = recent_5.mean()
+        
+        recent_10 = df['Close'].tail(10)
+        recent_10days_avg = recent_10.mean()
         
         recent_20 = df['Close'].tail(min(20, len_df))
-        uptrend_strength = (recent_20.diff() > 0).sum() / len(recent_20) * 100 if len(recent_20) > 1 else 50
-        
-        recent_volume = df['Volume'].tail(5).mean() if len_df >= 5 else df['Volume'].mean()
-        avg_volume = df['Volume'].mean()
-        volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
-        
-        # yfinance info에서 정보를 못 가져올 경우 대비 (안전장치)
+        if len(recent_20) > 1:
+            uptrend_strength = (recent_20.diff() > 0).sum() / len(recent_20) * 100
+        else:
+            uptrend_strength = 50
+            
+        recent_vol = df['Volume'].tail(5).mean() if len_df >= 5 else df['Volume'].mean()
+        avg_vol = df['Volume'].mean()
+        volume_ratio = recent_vol / avg_vol if avg_vol > 0 else 1.0
+
+        # 회사 정보 가져오기 (실패해도 분석은 진행)
         try:
             info = stock.info
             company_name = info.get('longName', ticker)
@@ -284,11 +317,11 @@ def get_quarterly_vwap_analysis(ticker):
             company_name = ticker
             sector = 'N/A'
             market_cap = 0
-        
+
         quarter_start_price = df['Close'].iloc[0]
         quarter_return = ((current_price - quarter_start_price) / quarter_start_price * 100)
         
-        # 화면에 표시할 분기 이름 (날짜 기준)
+        # 분기 표시
         q_num = (quarter_start.month - 1) // 3 + 1
         
         return {
@@ -296,7 +329,7 @@ def get_quarterly_vwap_analysis(ticker):
             'Company': company_name,
             'Sector': sector,
             'Quarter': f'{quarter_start.year} Q{q_num}',
-            'Trading_Days': len(df),
+            'Trading_Days': len_df,
             'Current_Price': float(current_price),
             'Anchored_VWAP': float(current_vwap),
             'Quarter_Return_%': float(quarter_return),
@@ -305,11 +338,15 @@ def get_quarterly_vwap_analysis(ticker):
             'Uptrend_Strength_%': float(uptrend_strength),
             'Volume_Ratio': float(volume_ratio),
             'Is_Above_VWAP': bool(current_price > current_vwap),
-            'Market_Cap': market_cap # 시총 정보 추가
+            'Market_Cap': market_cap
         }
+
     except Exception as e:
-        print(f"Error processing {ticker}: {str(e)}")
+        st.error(f"❌ [{ticker}] 지표 계산 중 오류: {e}")
+        # 상세 에러 확인을 위해 콘솔에도 출력
+        print(f"Error checking {ticker}: {e}")
         return None
+
 
 def calculate_buy_score(row):
     """매수 신호 점수 계산"""
