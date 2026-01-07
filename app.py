@@ -19,8 +19,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# ==================== 로그인 시스템 ====================
+# ==================== 로그인 시스템 (수정됨) ====================
 def check_password():
     """비밀번호 확인 및 로그인 상태 관리"""
     if st.session_state.get('password_correct', False):
@@ -30,19 +29,27 @@ def check_password():
     st.markdown("### AI 기반 투자 분석 시스템")
     
     with st.form("credentials"):
-        username = st.text_input("아이디 (ID)", key="username")
-        password = st.text_input("비밀번호 (Password)", type="password", key="password")
+        # [수정 1] key 이름을 'input_username', 'input_password'로 변경하여 충돌 방지
+        username = st.text_input("아이디 (ID)", key="input_username")
+        password = st.text_input("비밀번호 (Password)", type="password", key="input_password")
         submit_btn = st.form_submit_button("로그인", type="primary")
     
     if submit_btn:
+        # secrets가 설정되어 있는지 확인
+        if "passwords" not in st.secrets:
+            st.error("⚠️ .streamlit/secrets.toml 파일에 passwords 설정이 없습니다.")
+            return False
+
         if username in st.secrets["passwords"] and password == st.secrets["passwords"][username]:
             st.session_state['password_correct'] = True
+            # [수정 2] 이제 위젯 키와 다르므로 'username'에 값을 저장해도 에러가 나지 않음
             st.session_state['username'] = username
             st.rerun()
         else:
             st.error("😕 아이디 또는 비밀번호가 올바르지 않습니다.")
     
     return False
+
 
 if not check_password():
     st.stop()
