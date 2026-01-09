@@ -419,7 +419,7 @@ def get_comprehensive_fundamental(ticker):
 
 @st.cache_data(ttl=86400)
 def get_5year_growth_metrics(ticker):
-    """5개년 성장률 분석 (개선된 버전)"""
+    """5개년 성장률 분석 (애플 등 키값 불일치 문제 해결 버전)"""
     try:
         stock = yf.Ticker(ticker)
         financials = stock.financials
@@ -430,7 +430,6 @@ def get_5year_growth_metrics(ticker):
             return None
 
         # 1. 컬럼(연도)을 최신순(내림차순)으로 정렬 보장
-        # (가끔 순서가 뒤섞여 들어오는 경우 방지)
         financials = financials.reindex(sorted(financials.columns, reverse=True), axis=1)
         cashflow = cashflow.reindex(sorted(cashflow.columns, reverse=True), axis=1)
 
@@ -450,32 +449,56 @@ def get_5year_growth_metrics(ticker):
             'Free_Cash_Flow': []
         }
 
-        # 3. 유연한 인덱스 찾기 함수 (핵심 수정 사항)
-        # yfinance 버전이나 종목에 따라 키값이 다를 수 있음
-        def get_row_values(df, possible_keys):
+        # 3. [핵심 수정] 유연한 인덱스 찾기 함수 (Fuzzy Matching 도입)
+        def get_row_values_flexible(df, possible_keys):
+            # 1단계: 정확히 일치하는 키 찾기
             for key in possible_keys:
                 if key in df.index:
                     return df.loc[key, years].tolist()
+            
+            # 2단계: 키가 포함된 항목 찾기 (대소문자 무시, 부분 일치)
+            # 예: "Total Revenue"를 못 찾으면 "Revenue"가 포함된 인덱스를 찾음
+            df_index_lower = [idx.lower() for idx in df.index]
+            
+            for key in possible_keys:
+                key_lower = key.lower()
+                for idx, original_idx in zip(df_index_lower, df.index):
+                    if key_lower in idx:
+                        # 찾은 값 리턴 (가장 먼저 매칭된 것)
+                        return df.loc[original_idx, years].tolist()
             return []
 
-        # 매출 (Total Revenue 혹은 Revenue)
-        growth_data['Revenue'] = get_row_values(financials, ['Total Revenue', 'Revenue', 'Operating Revenue'])
+        # 매출 (우선순위별 키워드 지정)
+        growth_data['Revenue'] = get_row_values_flexible(
+            financials, 
+            ['Total Revenue', 'Operating Revenue', 'Revenue']
+        )
 
-        # 영업이익 (Operating Income)
-        growth_data['Operating_Income'] = get_row_values(financials, ['Operating Income'])
+        # 영업이익
+        growth_data['Operating_Income'] = get_row_values_flexible(
+            financials, 
+            ['Operating Income', 'Operating Profit']
+        )
 
-        # 순이익 (Net Income 혹은 Net Income Common Stockholders)
-        # AAPL 등 일부 종목은 'Net Income Common Stockholders'로 표기됨
-        growth_data['Net_Income'] = get_row_values(financials, ['Net Income', 'Net Income Common Stockholders'])
+        # 순이익 (애플은 'Net Income Common Stockholders'를 쓰는 경우가 많음)
+        growth_data['Net_Income'] = get_row_values_flexible(
+            financials, 
+            ['Net Income', 'Net Income Common Stockholders', 'Net Income Continuous Operations']
+        )
 
-        # 잉여현금흐름 (Free Cash Flow)
-        growth_data['Free_Cash_Flow'] = get_row_values(cashflow, ['Free Cash Flow'])
+        # 잉여현금흐름
+        growth_data['Free_Cash_Flow'] = get_row_values_flexible(
+            cashflow, 
+            ['Free Cash Flow', 'Free Cash Flow (TTM)']
+        )
 
         return growth_data
 
     except Exception as e:
         print(f"Error fetching growth data for {ticker}: {e}")
         return None
+
+
 
 def calculate_cagr(start_value, end_value, years):
     """CAGR 계산"""
