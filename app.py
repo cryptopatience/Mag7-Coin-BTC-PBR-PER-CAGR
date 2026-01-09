@@ -419,25 +419,26 @@ def get_comprehensive_fundamental(ticker):
 
 @st.cache_data(ttl=86400)
 def get_5year_growth_metrics(ticker):
-    """5개년 성장률 분석 (애플 등 키값 불일치 문제 해결 버전)"""
+    """5개년 성장률 분석 (개선된 버전 v2)"""
     try:
         stock = yf.Ticker(ticker)
-        financials = stock.financials
-        cashflow = stock.cashflow
+        financials = stock.financials  # 손익계산서
+        cashflow = stock.cashflow      # 현금흐름표
 
         # 데이터가 비어있는 경우 처리
         if financials.empty or cashflow.empty:
+            print(f"[{ticker}] 재무제표 데이터가 비어있음")
             return None
 
-        # 1. 컬럼(연도)을 최신순(내림차순)으로 정렬 보장
+        # 1. 컬럼(연도)을 최신순(내림차순)으로 정렬
         financials = financials.reindex(sorted(financials.columns, reverse=True), axis=1)
         cashflow = cashflow.reindex(sorted(cashflow.columns, reverse=True), axis=1)
 
         # 2. 최근 5년 데이터만 추출
         years = financials.columns[:5] if len(financials.columns) >= 5 else financials.columns
         
-        # 데이터가 너무 적으면 리턴
         if len(years) < 2:
+            print(f"[{ticker}] 데이터가 너무 적음 (2년 미만)")
             return None
 
         growth_data = {
@@ -449,55 +450,64 @@ def get_5year_growth_metrics(ticker):
             'Free_Cash_Flow': []
         }
 
-        # 3. [핵심 수정] 유연한 인덱스 찾기 함수 (Fuzzy Matching 도입)
-        def get_row_values_flexible(df, possible_keys):
-            # 1단계: 정확히 일치하는 키 찾기
+        # 3. 유연한 인덱스 찾기 함수 (핵심 개선)
+        def get_row_values(df, possible_keys, label=""):
+            """
+            가능한 키 리스트를 순회하며 첫 번째로 찾은 값을 반환
+            label: 디버깅용 출력 라벨
+            """
             for key in possible_keys:
                 if key in df.index:
-                    return df.loc[key, years].tolist()
+                    values = df.loc[key, years].tolist()
+                    print(f"[{ticker}] {label}: '{key}' 키 사용 → 값: {values[:2]}...")  # 처음 2개만 출력
+                    return values
             
-            # 2단계: 키가 포함된 항목 찾기 (대소문자 무시, 부분 일치)
-            # 예: "Total Revenue"를 못 찾으면 "Revenue"가 포함된 인덱스를 찾음
-            df_index_lower = [idx.lower() for idx in df.index]
-            
-            for key in possible_keys:
-                key_lower = key.lower()
-                for idx, original_idx in zip(df_index_lower, df.index):
-                    if key_lower in idx:
-                        # 찾은 값 리턴 (가장 먼저 매칭된 것)
-                        return df.loc[original_idx, years].tolist()
+            # 모든 키를 못 찾았을 때 경고
+            print(f"⚠️ [{ticker}] {label}: 다음 키들을 찾지 못함 → {possible_keys}")
             return []
 
-        # 매출 (우선순위별 키워드 지정)
-        growth_data['Revenue'] = get_row_values_flexible(
+        # 4. 각 지표별 데이터 수집 (키 패턴 확장)
+        
+        # 매출 (Total Revenue 혹은 Revenue)
+        growth_data['Revenue'] = get_row_values(
             financials, 
-            ['Total Revenue', 'Operating Revenue', 'Revenue']
+            ['Total Revenue', 'Revenue', 'Operating Revenue', 'Total Revenues'],
+            label="매출"
         )
 
-        # 영업이익
-        growth_data['Operating_Income'] = get_row_values_flexible(
+        # 영업이익 (Operating Income)
+        growth_data['Operating_Income'] = get_row_values(
             financials, 
-            ['Operating Income', 'Operating Profit']
+            ['Operating Income', 'Operating Income Or Loss', 'EBIT'],
+            label="영업이익"
         )
 
-        # 순이익 (애플은 'Net Income Common Stockholders'를 쓰는 경우가 많음)
-        growth_data['Net_Income'] = get_row_values_flexible(
+        # 순이익 (Net Income)
+        growth_data['Net_Income'] = get_row_values(
             financials, 
-            ['Net Income', 'Net Income Common Stockholders', 'Net Income Continuous Operations']
+            [
+                'Net Income', 
+                'Net Income Common Stockholders',
+                'Net Income From Continuing Operations',
+                'Net Income Continuous Operations'
+            ],
+            label="순이익"
         )
 
-        # 잉여현금흐름
-        growth_data['Free_Cash_Flow'] = get_row_values_flexible(
+        # 잉여현금흐름 (Free Cash Flow)
+        growth_data['Free_Cash_Flow'] = get_row_values(
             cashflow, 
-            ['Free Cash Flow', 'Free Cash Flow (TTM)']
+            ['Free Cash Flow', 'FreeCashFlow'],
+            label="FCF"
         )
 
         return growth_data
 
     except Exception as e:
-        print(f"Error fetching growth data for {ticker}: {e}")
+        print(f"❌ [{ticker}] 5개년 데이터 수집 오류: {e}")
+        import traceback
+        traceback.print_exc()  # 상세 에러 출력
         return None
-
 
 
 def calculate_cagr(start_value, end_value, years):
