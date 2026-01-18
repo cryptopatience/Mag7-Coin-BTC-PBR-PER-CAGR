@@ -111,7 +111,7 @@ with st.sidebar:
     
     show_technical = st.checkbox("기술적 분석", value=True)
     show_fundamental = st.checkbox("펀더멘털 분석", value=True)
-    show_growth = st.checkbox("5개년 성장률 분석", value=True)
+    show_growth = st.checkbox("성장률 분석 (1/3/5년)", value=True)
     show_ai = st.checkbox("AI Deep Dive 분석", value=False)
     
     st.markdown("---")
@@ -308,24 +308,23 @@ def get_quarterly_vwap_analysis(ticker):
         market_cap = 0
         
         try:
-            # 1단계: fast_info 사용 (가장 빠르고 정확함)
-            if hasattr(stock, 'fast_info'):
-                market_cap = stock.fast_info.get('market_cap', 0)
+            # 1단계: info 직접 호출 (가장 확실함)
+            info = stock.info
+            market_cap = info.get('marketCap', 0)
             
-            # 2단계: fast_info 실패 시 info 시도 (구형 호환)
-            if market_cap == 0:
-                info = stock.info
-                market_cap = info.get('marketCap', 0)
-                company_name = info.get('longName', ticker)
-                sector = info.get('sector', 'N/A')
-            else:
-                # fast_info로 시총은 구했으나 이름/섹터가 필요할 때
-                # info는 느리므로 필요할 때만 호출하거나 MAG9_ASSETS 딕셔너리 활용 권장
-                # 여기서는 기존 구조 유지를 위해 그대로 둠 (속도 저하 가능성 있음)
-                pass
+            # 2단계: fast_info 시도 (실패 시 대비)
+            if market_cap == 0 and hasattr(stock, 'fast_info'):
+                try:
+                    market_cap = stock.fast_info.get('market_cap', 0)
+                except:
+                    pass
+            
+            company_name = info.get('longName', ticker)
+            sector = info.get('sector', 'N/A')
 
         except Exception as e:
             print(f"Info fetch error for {ticker}: {e}")
+            market_cap = 0
 
         # MAG9_ASSETS 딕셔너리에서 이름/섹터 정보 보완 (API 호출 최소화)
         if ticker in MAG9_ASSETS:
@@ -417,45 +416,6 @@ def get_comprehensive_fundamental(ticker):
     except Exception as e:
         return None
 
-@st.cache_data(ttl=86400)
-def get_5year_growth_metrics(ticker):
-    """5개년 성장률 분석"""
-    try:
-        stock = yf.Ticker(ticker)
-        financials = stock.financials
-        cashflow = stock.cashflow
-
-        if financials.empty:
-            return None
-
-        years = financials.columns[:5] if len(financials.columns) >= 5 else financials.columns
-
-        growth_data = {
-            'Ticker': ticker,
-            'Years': [year.year for year in years],
-            'Revenue': [],
-            'Operating_Income': [],
-            'Net_Income': [],
-            'Free_Cash_Flow': []
-        }
-
-        if 'Total Revenue' in financials.index:
-            growth_data['Revenue'] = financials.loc['Total Revenue', years].tolist()
-
-        if 'Operating Income' in financials.index:
-            growth_data['Operating_Income'] = financials.loc['Operating Income', years].tolist()
-
-        if 'Net Income' in financials.index:
-            growth_data['Net_Income'] = financials.loc['Net Income', years].tolist()
-
-        if 'Free Cash Flow' in cashflow.index:
-            growth_data['Free_Cash_Flow'] = cashflow.loc['Free Cash Flow', years].tolist()
-
-        return growth_data
-
-    except Exception as e:
-        return None
-
 def calculate_cagr(start_value, end_value, years):
     """CAGR 계산"""
     if start_value <= 0 or end_value <= 0 or years <= 0:
@@ -465,6 +425,84 @@ def calculate_cagr(start_value, end_value, years):
         return round(cagr, 2)
     except:
         return 0
+
+@st.cache_data(ttl=86400)
+def get_multi_year_growth_metrics(ticker):
+    """1개년, 3개년, 5개년 성장률 분석"""
+    try:
+        stock = yf.Ticker(ticker)
+        financials = stock.financials
+        cashflow = stock.cashflow
+
+        if financials.empty:
+            return None
+
+        years = financials.columns[:5] if len(financials.columns) >= 5 else financials.columns
+        
+        # CAGR 계산 함수 (내부)
+        def calc_cagr(values, period):
+            if len(values) < period + 1:
+                return None
+            start_val = values[-1]  # 가장 오래된 값
+            end_val = values[0]     # 가장 최근 값
+            if start_val > 0 and end_val > 0:
+                return calculate_cagr(start_val, end_val, period)
+            return None
+
+        growth_data = {
+            'Ticker': ticker,
+            'Years': [year.year for year in years],
+        }
+        
+        # 각 메트릭별 원본 데이터 수집
+        metrics = {
+            'Revenue': 'Total Revenue',
+            'Operating_Income': 'Operating Income',
+            'Net_Income': 'Net Income',
+        }
+        
+        for key, index_name in metrics.items():
+            if index_name in financials.index:
+                growth_data[key] = financials.loc[index_name, years].tolist()
+            else:
+                growth_data[key] = []
+        
+        if 'Free Cash Flow' in cashflow.index:
+            growth_data['Free_Cash_Flow'] = cashflow.loc['Free Cash Flow', years].tolist()
+        else:
+            growth_data['Free_Cash_Flow'] = []
+        
+        # CAGR 계산 (1년/3년/5년)
+        cagr_results = {'Ticker': ticker}
+        
+        for metric_key in ['Revenue', 'Net_Income', 'Operating_Income', 'Free_Cash_Flow']:
+            values = growth_data.get(metric_key, [])
+            
+            # 1년 성장률 (YoY)
+            if len(values) >= 2:
+                cagr_results[f'{metric_key}_1Y_%'] = calc_cagr(values[:2], 1)
+            else:
+                cagr_results[f'{metric_key}_1Y_%'] = None
+            
+            # 3년 CAGR
+            if len(values) >= 4:
+                cagr_results[f'{metric_key}_3Y_%'] = calc_cagr(values[:4], 3)
+            else:
+                cagr_results[f'{metric_key}_3Y_%'] = None
+            
+            # 5년 CAGR
+            if len(values) >= 5:
+                cagr_results[f'{metric_key}_5Y_%'] = calc_cagr(values, 5)
+            else:
+                cagr_results[f'{metric_key}_5Y_%'] = None
+        
+        cagr_results['분석기간'] = f"{growth_data['Years'][-1]}-{growth_data['Years'][0]}" if len(growth_data['Years']) > 0 else "N/A"
+        
+        return cagr_results
+
+    except Exception as e:
+        print(f"Growth metrics error for {ticker}: {e}")
+        return None
 
 # ==================== AI 분석 함수 (Dual Engine 고도화) ====================
 
@@ -558,7 +596,7 @@ def call_openai_api(prompt):
 def call_gemini_api(prompt):
     if not GEMINI_ENABLED: return "Gemini API 키가 없습니다."
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash') # 모델명 확인 필요 (gemini-pro 또는 gemini-1.5-flash 권장)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp') # 모델명 확인 필요
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -578,7 +616,6 @@ st.info(f"""
 🌟 **분석 대상**: MAG 7 + COINBASE + BITCOIN (9개 자산)
 """)
 
-# ==================== 기술적 분석 ====================
 # ==================== 기술적 분석 ====================
 if show_technical:
     st.markdown("---")
@@ -634,10 +671,6 @@ if show_technical:
             st.stop()
 
     st.success("✓ 데이터 수집 완료!")
-    
-    # ... (이하 코드 동일)
-
-
     
     # 상위 3개 종목 카드
     st.subheader("🏆 TOP 3 추천 종목")
@@ -819,7 +852,7 @@ if show_fundamental:
             use_container_width=True
         )
         
-        # 펀더멘털 차트
+        # 펀더멘털 차트 (수정됨)
         fig_fund = make_subplots(
             rows=2, cols=3,
             subplot_titles=('PER (낮을수록 저평가)', 'PBR (낮을수록 저평가)', 'ROE (%)',
@@ -838,126 +871,181 @@ if show_fundamental:
         ]
         
         for metric, row, col, color in metrics:
-            fig_fund.add_trace(
-                go.Bar(
-                    x=df_fundamental['Ticker'],
-                    y=df_fundamental[metric],
-                    name=metric,
-                    marker_color=color,
-                    text=df_fundamental[metric].round(2),
-                    textposition='auto',
-                    showlegend=False
-                ),
-                row=row, col=col
-            )
+            # NaN 값 제거
+            valid_data = df_fundamental[df_fundamental[metric].notna()]
+            
+            if not valid_data.empty:
+                fig_fund.add_trace(
+                    go.Bar(
+                        x=valid_data['Ticker'],
+                        y=valid_data[metric],
+                        name=metric,
+                        marker_color=color,
+                        text=[f"{v:.2f}" for v in valid_data[metric]],
+                        textposition='auto',
+                        showlegend=False
+                    ),
+                    row=row, col=col
+                )
         
         fig_fund.update_layout(
             title_text=f'펀더멘털 6개 지표 비교 ({quarter_start.year} Q{quarter_num})',
             height=800,
-            showlegend=False,
             template='plotly_white'
         )
+        
+        # y축 레이블 추가
+        for i in range(1, 3):
+            for j in range(1, 4):
+                fig_fund.update_yaxes(title_text="값", row=i, col=j)
         
         st.plotly_chart(fig_fund, use_container_width=True)
 
-# ==================== 5개년 성장률 분석 ====================
+# ==================== 성장률 분석 (1/3/5년) ====================
 if show_growth:
     st.markdown("---")
-    st.header("📈 5개년 성장률 분석 (CAGR)")
+    st.header("📈 성장률 분석 (1년/3년/5년 CAGR)")
     
-    with st.spinner("5개년 재무 데이터 수집 중..."):
-        all_growth_data = []
+    with st.spinner("재무 데이터 수집 중..."):
+        all_cagr_data = []
         stock_tickers = [t for t in all_tickers if MAG9_ASSETS[t]['type'] == 'Stock']
         
         for ticker in stock_tickers:
-            growth_data = get_5year_growth_metrics(ticker)
-            if growth_data:
-                all_growth_data.append(growth_data)
+            cagr_data = get_multi_year_growth_metrics(ticker)
+            if cagr_data:
+                all_cagr_data.append(cagr_data)
     
-    if all_growth_data:
-        st.success(f"✓ 총 {len(all_growth_data)}개 종목 데이터 수집 완료!")
+    if all_cagr_data:
+        st.success(f"✓ 총 {len(all_cagr_data)}개 종목 데이터 수집 완료!")
         
-        # CAGR 계산
-        cagr_summary = []
+        df_cagr = pd.DataFrame(all_cagr_data)
         
-        for data in all_growth_data:
-            ticker = data['Ticker']
-            years_count = len(data['Years']) - 1
+        # 탭으로 기간별 분리
+        tab1y, tab3y, tab5y = st.tabs(["📊 1년 성장률 (YoY)", "📊 3년 CAGR", "📊 5년 CAGR"])
+        
+        with tab1y:
+            cols_1y = ['Ticker', '분석기간', 'Revenue_1Y_%', 'Net_Income_1Y_%', 
+                       'Operating_Income_1Y_%', 'Free_Cash_Flow_1Y_%']
+            display_df = df_cagr[cols_1y].copy()
             
-            if years_count <= 0:
-                continue
+            st.dataframe(
+                display_df.style.format({
+                    'Revenue_1Y_%': '{:.2f}%',
+                    'Net_Income_1Y_%': '{:.2f}%',
+                    'Operating_Income_1Y_%': '{:.2f}%',
+                    'Free_Cash_Flow_1Y_%': '{:.2f}%'
+                }, na_rep='N/A'),
+                use_container_width=True
+            )
             
-            cagr_data = {'Ticker': ticker}
+            # 차트
+            fig = go.Figure()
+            metrics = ['Revenue_1Y_%', 'Net_Income_1Y_%', 'Operating_Income_1Y_%', 'Free_Cash_Flow_1Y_%']
+            colors = ['#3498db', '#e74c3c', '#f39c12', '#2ecc71']
             
-            metrics_cagr = [
-                ('Revenue', '매출_CAGR_%'),
-                ('Net_Income', '순이익_CAGR_%'),
-                ('Operating_Income', '영업이익_CAGR_%'),
-                ('Free_Cash_Flow', 'FCF_CAGR_%')
-            ]
+            for idx, metric in enumerate(metrics):
+                valid_data = df_cagr[df_cagr[metric].notna()]
+                if not valid_data.empty:
+                    fig.add_trace(go.Bar(
+                        name=metric.replace('_1Y_%', ''),
+                        x=valid_data['Ticker'],
+                        y=valid_data[metric],
+                        text=[f"{v:.1f}%" for v in valid_data[metric]],
+                        textposition='auto',
+                        marker_color=colors[idx]
+                    ))
             
-            for metric_key, cagr_key in metrics_cagr:
-                if data[metric_key] and len(data[metric_key]) >= 2:
-                    start_val = data[metric_key][-1]
-                    end_val = data[metric_key][0]
-                    if start_val > 0 and end_val > 0:
-                        cagr_data[cagr_key] = calculate_cagr(start_val, end_val, years_count)
-                    else:
-                        cagr_data[cagr_key] = None
-                else:
-                    cagr_data[cagr_key] = None
+            fig.update_layout(
+                title='1년 성장률 (YoY) 비교',
+                xaxis_title='종목',
+                yaxis_title='성장률 (%)',
+                barmode='group',
+                height=500,
+                template='plotly_white'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tab3y:
+            cols_3y = ['Ticker', '분석기간', 'Revenue_3Y_%', 'Net_Income_3Y_%', 
+                       'Operating_Income_3Y_%', 'Free_Cash_Flow_3Y_%']
+            display_df = df_cagr[cols_3y].copy()
             
-            cagr_data['분석기간'] = f"{data['Years'][-1]}-{data['Years'][0]}"
-            cagr_summary.append(cagr_data)
-        
-        df_cagr = pd.DataFrame(cagr_summary)
-        
-        st.dataframe(
-            df_cagr.style.format({
-                '매출_CAGR_%': '{:.2f}%',
-                '순이익_CAGR_%': '{:.2f}%',
-                '영업이익_CAGR_%': '{:.2f}%',
-                'FCF_CAGR_%': '{:.2f}%'
-            }, na_rep='N/A'),
-            use_container_width=True
-        )
-        
-        # CAGR 차트
-        fig_cagr = go.Figure()
-        
-        cagr_metrics = ['매출_CAGR_%', '순이익_CAGR_%', '영업이익_CAGR_%', 'FCF_CAGR_%']
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#2ecc71']
-        
-        for idx, metric in enumerate(cagr_metrics):
-            values = []
-            tickers = []
+            st.dataframe(
+                display_df.style.format({
+                    'Revenue_3Y_%': '{:.2f}%',
+                    'Net_Income_3Y_%': '{:.2f}%',
+                    'Operating_Income_3Y_%': '{:.2f}%',
+                    'Free_Cash_Flow_3Y_%': '{:.2f}%'
+                }, na_rep='N/A'),
+                use_container_width=True
+            )
             
-            for _, row in df_cagr.iterrows():
-                val = row[metric]
-                if pd.notna(val):
-                    values.append(val)
-                    tickers.append(row['Ticker'])
+            # 차트
+            fig = go.Figure()
+            metrics = ['Revenue_3Y_%', 'Net_Income_3Y_%', 'Operating_Income_3Y_%', 'Free_Cash_Flow_3Y_%']
             
-            if values:
-                fig_cagr.add_trace(go.Bar(
-                    name=metric.replace('_CAGR_%', ''),
-                    x=tickers,
-                    y=values,
-                    text=[f"{v:.1f}%" for v in values],
-                    textposition='auto',
-                    marker_color=colors[idx]
-                ))
+            for idx, metric in enumerate(metrics):
+                valid_data = df_cagr[df_cagr[metric].notna()]
+                if not valid_data.empty:
+                    fig.add_trace(go.Bar(
+                        name=metric.replace('_3Y_%', ''),
+                        x=valid_data['Ticker'],
+                        y=valid_data[metric],
+                        text=[f"{v:.1f}%" for v in valid_data[metric]],
+                        textposition='auto',
+                        marker_color=colors[idx]
+                    ))
+            
+            fig.update_layout(
+                title='3년 CAGR 비교',
+                xaxis_title='종목',
+                yaxis_title='CAGR (%)',
+                barmode='group',
+                height=500,
+                template='plotly_white'
+            )
+            st.plotly_chart(fig, use_container_width=True)
         
-        fig_cagr.update_layout(
-            title='5개년 CAGR 비교 (4개 지표)',
-            xaxis_title='종목',
-            yaxis_title='CAGR (%)',
-            barmode='group',
-            height=600,
-            template='plotly_white'
-        )
-        
-        st.plotly_chart(fig_cagr, use_container_width=True)
+        with tab5y:
+            cols_5y = ['Ticker', '분석기간', 'Revenue_5Y_%', 'Net_Income_5Y_%', 
+                       'Operating_Income_5Y_%', 'Free_Cash_Flow_5Y_%']
+            display_df = df_cagr[cols_5y].copy()
+            
+            st.dataframe(
+                display_df.style.format({
+                    'Revenue_5Y_%': '{:.2f}%',
+                    'Net_Income_5Y_%': '{:.2f}%',
+                    'Operating_Income_5Y_%': '{:.2f}%',
+                    'Free_Cash_Flow_5Y_%': '{:.2f}%'
+                }, na_rep='N/A'),
+                use_container_width=True
+            )
+            
+            # 차트
+            fig = go.Figure()
+            metrics = ['Revenue_5Y_%', 'Net_Income_5Y_%', 'Operating_Income_5Y_%', 'Free_Cash_Flow_5Y_%']
+            
+            for idx, metric in enumerate(metrics):
+                valid_data = df_cagr[df_cagr[metric].notna()]
+                if not valid_data.empty:
+                    fig.add_trace(go.Bar(
+                        name=metric.replace('_5Y_%', ''),
+                        x=valid_data['Ticker'],
+                        y=valid_data[metric],
+                        text=[f"{v:.1f}%" for v in valid_data[metric]],
+                        textposition='auto',
+                        marker_color=colors[idx]
+                    ))
+            
+            fig.update_layout(
+                title='5년 CAGR 비교',
+                xaxis_title='종목',
+                yaxis_title='CAGR (%)',
+                barmode='group',
+                height=500,
+                template='plotly_white'
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ==================== AI Deep Dive 분석 (Dual Engine) ====================
