@@ -577,15 +577,19 @@ st.info(f"""
 🌟 **분석 대상**: MAG 7 + COINBASE + BITCOIN (9개 자산)
 """)
 
-# ==================== 기술적 분석 ====================
+# ==================== 공통 변수 ====================
+all_tickers = list(MAG9_ASSETS.keys())
+df_results = pd.DataFrame()
+df_fundamental = pd.DataFrame()
+df_cagr = pd.DataFrame()
+
 # ==================== 기술적 분석 ====================
 if show_technical:
     st.markdown("---")
     st.header("📈 기술적 분석 (Anchored VWAP)")
-    
+
     with st.spinner("MAG 9 데이터 수집 중..."):
         results = []
-        all_tickers = list(MAG9_ASSETS.keys())
         
         progress_bar = st.progress(0)
         for idx, ticker in enumerate(all_tickers):
