@@ -10,8 +10,17 @@ from plotly.subplots import make_subplots
 import openai
 import google.generativeai as genai
 import time
+import requests
 
 warnings.filterwarnings('ignore')
+
+# yfinance 클라우드 차단 우회용 세션
+def create_yf_session():
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    return session
 
 
 # OpenAI와 Gemini 임포트 (선택적)
@@ -393,11 +402,11 @@ def calculate_buy_score(row):
 def get_comprehensive_fundamental(ticker):
     """상세 펀더멘털 분석"""
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-
         if ticker == 'BTC-USD':
             return None
+
+        stock = yf.Ticker(ticker, session=create_yf_session())
+        info = stock.info
 
         def safe_get(key, default=None):
             value = info.get(key)
@@ -420,7 +429,7 @@ def get_comprehensive_fundamental(ticker):
 def get_5year_growth_metrics(ticker):
     """5개년 성장률 분석"""
     try:
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=create_yf_session())
         financials = stock.financials
         cashflow = stock.cashflow
 
