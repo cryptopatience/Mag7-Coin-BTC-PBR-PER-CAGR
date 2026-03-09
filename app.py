@@ -9,6 +9,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import openai
 import google.generativeai as genai
+import time
 
 warnings.filterwarnings('ignore')
 
@@ -112,7 +113,7 @@ with st.sidebar:
     show_technical = st.checkbox("기술적 분석", value=True)
     show_fundamental = st.checkbox("펀더멘털 분석", value=True)
     show_growth = st.checkbox("5개년 성장률 분석", value=True)
-    show_ai = st.checkbox("AI Deep Dive 분석", value=False)
+    show_ai = st.checkbox("AI Deep Dive 분석", value=True)
     
     st.markdown("---")
     st.markdown("### 🎯 AI 분석 설정")
@@ -260,22 +261,25 @@ def get_quarterly_vwap_analysis(ticker):
         st.error(f"❌ [{ticker}] 날짜 계산 오류: {e}")
         return None
 
-    # 2. 데이터 가져오기 (yfinance)
-    try:
-        stock = yf.Ticker(ticker)
-        # auto_adjust=True로 수정주가 반영
-        df = stock.history(start=quarter_start, end=end_date, auto_adjust=True)
-        
-        # 데이터가 없으면 기간을 늘려서 재시도
-        if df.empty:
-            df = stock.history(start=quarter_start - timedelta(days=10), end=end_date, auto_adjust=True)
+    # 2. 데이터 가져오기 (yfinance, rate limit 대응 retry)
+    df = None
+    for attempt in range(3):
+        try:
+            stock = yf.Ticker(ticker)
+            df = stock.history(start=quarter_start, end=end_date, auto_adjust=True)
 
-        if df.empty:
-            print(f"[{ticker}] 데이터 수집 실패")
-            return None
-            
-    except Exception as e:
-        st.error(f"❌ [{ticker}] yfinance 호출 오류: {e}")
+            if df.empty:
+                df = stock.history(start=quarter_start - timedelta(days=10), end=end_date, auto_adjust=True)
+            break
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1초, 2초 대기 후 재시도
+            else:
+                st.warning(f"⚠️ [{ticker}] 데이터 수집 실패 (건너뜀): {e}")
+                return None
+
+    if df is None or df.empty:
+        print(f"[{ticker}] 데이터 수집 실패")
         return None
 
     # 3. VWAP 및 지표 계산
@@ -590,7 +594,9 @@ if show_technical:
         
         progress_bar = st.progress(0)
         for idx, ticker in enumerate(all_tickers):
-            # 1. VWAP 분석 데이터 가져오기
+            # 1. VWAP 분석 데이터 가져오기 (종목 간 딜레이로 rate limit 방지)
+            if idx > 0:
+                time.sleep(0.5)
             result = get_quarterly_vwap_analysis(ticker)
             
             # 2. 데이터가 성공적으로 수집되었을 경우, 자산 정보(Type, Description 등) 병합
