@@ -1,5 +1,3 @@
-
-
 # 핵심 라이브러리
 streamlit>=1.28.0
 pandas>=2.0.0
@@ -11,6 +9,7 @@ pykrx>=1.0.36
 
 # 시각화
 plotly>=5.17.0
+matplotlib>=3.7.0
 
 # Gemini AI 분석
 google-generativeai>=0.3.0
