@@ -48,24 +48,19 @@ def check_password():
     st.markdown("### AI 기반 투자 분석 시스템")
     
     with st.form("credentials"):
-        # [수정 1] key 이름을 'input_username', 'input_password'로 변경하여 충돌 방지
-        username = st.text_input("아이디 (ID)", key="input_username")
         password = st.text_input("비밀번호 (Password)", type="password", key="input_password")
         submit_btn = st.form_submit_button("로그인", type="primary")
-    
+
     if submit_btn:
-        # secrets가 설정되어 있는지 확인
-        if "passwords" not in st.secrets:
-            st.error("⚠️ .streamlit/secrets.toml 파일에 passwords 설정이 없습니다.")
+        if "password" not in st.secrets:
+            st.error("⚠️ .streamlit/secrets.toml 파일에 password 설정이 없습니다.")
             return False
 
-        if username in st.secrets["passwords"] and password == st.secrets["passwords"][username]:
+        if password == st.secrets["password"]:
             st.session_state['password_correct'] = True
-            # [수정 2] 이제 위젯 키와 다르므로 'username'에 값을 저장해도 에러가 나지 않음
-            st.session_state['username'] = username
             st.rerun()
         else:
-            st.error("😕 아이디 또는 비밀번호가 올바르지 않습니다.")
+            st.error("😕 비밀번호가 올바르지 않습니다.")
     
     return False
 
@@ -101,7 +96,7 @@ OPENAI_MODEL_CHAT = st.secrets.get("OPENAI_MODEL_CHAT", "gpt-4o-mini")
 
 # ==================== 사이드바 ====================
 with st.sidebar:
-    st.success(f"✅ {st.session_state.get('username', '사용자')}님 환영합니다!")
+    st.success("✅ 환영합니다!")
     
     if st.button("🚪 로그아웃", use_container_width=True):
         st.session_state['password_correct'] = False
