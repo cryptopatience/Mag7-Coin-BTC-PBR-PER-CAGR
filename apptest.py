@@ -130,13 +130,6 @@ with st.sidebar:
             index=2
         )
         
-        top_n_analysis = st.slider(
-            "AI 분석할 상위 종목 수",
-            min_value=1,
-            max_value=9,
-            value=3
-        )
-    
     st.markdown("---")
     st.markdown("### ℹ️ 정보")
     st.info("""
@@ -408,21 +401,22 @@ def get_comprehensive_fundamental(ticker):
     info = None
     last_error = None
 
-    # session 사용 → 실패 시 session 없이 재시도
-    for use_session in [True, False]:
+    # session 사용 3회 → session 없이 2회 재시도 (클라우드 rate limit 대응)
+    attempts = [(True, 1), (True, 2), (True, 4), (False, 2), (False, 4)]
+    for use_session, wait in attempts:
         try:
             if use_session:
                 stock = yf.Ticker(ticker, session=create_yf_session())
             else:
                 stock = yf.Ticker(ticker)
             info = stock.info
-            # info가 거의 비어있으면 실패로 간주
             if info and len(info) > 5:
                 break
             info = None
+            time.sleep(wait)
         except Exception as e:
             last_error = e
-            time.sleep(1)
+            time.sleep(wait)
 
     if not info:
         print(f"[{ticker}] 펀더멘털 수집 실패: {last_error}")
@@ -459,7 +453,7 @@ def get_5year_growth_metrics(ticker):
             if financials is not None and not financials.empty:
                 break
             financials = None
-        except Exception as e:
+        except Exception:
             time.sleep(1)
 
     if financials is None or financials.empty:
@@ -839,11 +833,13 @@ if show_fundamental:
         fundamental_data = []
         stock_tickers = [t for t in all_tickers if MAG9_ASSETS[t]['type'] == 'Stock']
         
-        for ticker in stock_tickers:
+        for idx, ticker in enumerate(stock_tickers):
+            if idx > 0:
+                time.sleep(1.5)
             fund_data = get_comprehensive_fundamental(ticker)
             if fund_data:
                 fundamental_data.append(fund_data)
-        
+
         df_fundamental = pd.DataFrame(fundamental_data)
     
     if not df_fundamental.empty:
@@ -911,7 +907,9 @@ if show_growth:
         all_growth_data = []
         stock_tickers = [t for t in all_tickers if MAG9_ASSETS[t]['type'] == 'Stock']
         
-        for ticker in stock_tickers:
+        for idx, ticker in enumerate(stock_tickers):
+            if idx > 0:
+                time.sleep(1.5)
             growth_data = get_5year_growth_metrics(ticker)
             if growth_data:
                 all_growth_data.append(growth_data)
