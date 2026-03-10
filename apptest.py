@@ -568,6 +568,33 @@ def get_single_stock_prompt(ticker_data, fundamental_data, cagr_data):
     """
     return prompt
 
+def get_fundamental_comparison_prompt(df_fundamental, df_cagr):
+    """펀더멘털 6개 지표 비교 분석용 프롬프트 생성"""
+    fund_table = df_fundamental.to_string(index=False) if not df_fundamental.empty else "데이터 없음"
+    cagr_table = df_cagr.to_string(index=False) if not df_cagr.empty else "데이터 없음"
+
+    prompt = f"""
+    당신은 월스트리트 최고의 퀀트 펀드매니저입니다.
+    아래 MAG 9 종목들의 펀더멘털 6개 지표와 5개년 CAGR 데이터를 바탕으로 종합 비교 분석 리포트를 작성하세요.
+
+    ## 펀더멘털 6개 지표 (PER, PBR, ROE, 영업이익률, 부채비율, 매출성장률)
+    {fund_table}
+
+    ## 5개년 CAGR (매출, 순이익, 영업이익, FCF)
+    {cagr_table}
+
+    ## 분석 요구사항 (반드시 한국어로 작성)
+    1. **밸류에이션 순위**: PER과 PBR 기준으로 가장 저평가된 종목과 고평가된 종목을 각각 2개씩 꼽고 이유를 설명하세요.
+    2. **수익성 챔피언**: ROE와 영업이익률이 가장 우수한 종목을 선정하고, 이 종목이 높은 수익성을 유지하는 이유를 비즈니스 모델 관점에서 설명하세요.
+    3. **성장성 vs 안정성 트레이드오프**: 매출성장률(CAGR)이 높은 종목과 부채비율이 낮은 종목을 비교하여 공격적 성장주 vs 방어적 우량주 관점에서 분류하세요.
+    4. **PEG 관점 투자매력도**: PER 대비 매출 CAGR을 고려하여 실질적으로 가장 투자 매력이 높은 종목 Top 3를 선정하고 근거를 제시하세요.
+    5. **리스크 경보**: 부채비율이 과도하거나 수익성이 취약한 종목에 대해 경고 신호를 발신하세요.
+    6. **최종 포트폴리오 제안**: 펀더멘털 기준으로 MAG 9 중 비중을 늘려야 할 종목과 줄여야 할 종목을 각각 3개씩 추천하세요.
+
+    결론은 표(Table) 형식을 포함하여 명확하게 작성하세요.
+    """
+    return prompt
+
 def call_openai_api(prompt):
     if not OPENAI_ENABLED: return "OpenAI API 키가 없습니다."
     try:
@@ -1007,71 +1034,123 @@ if show_ai:
     st.markdown("OpenAI(GPT-4)와 Google Gemini가 동시에 분석하여 교차 검증합니다.")
 
     # 탭으로 분석 모드 분리
-    tab_market, tab_stock = st.tabs(["🌍 종합 시장 분석 (Macro)", "🔍 개별 종목 심층 분석 (Micro)"])
+    tab_market, tab_fundamental, tab_stock = st.tabs(["🌍 종합 시장 분석 (Macro)", "💼 펀더멘털 비교 분석", "🔍 개별 종목 심층 분석 (Micro)"])
 
     # 1. 종합 시장 분석 탭
     with tab_market:
         st.subheader("📊 MAG 9 시장 전체 브리핑")
-        st.info("MAG 9 전체 데이터(주식+코인)를 기반으로 시장의 흐름과 자금 이동을 분석합니다.")
-        
-        if st.button("🚀 종합 시장 분석 실행", type="primary", use_container_width=True):
+
+        # 자동 실행: 로그인 후 결과가 없을 때만 호출
+        if 'market_openai' not in st.session_state or 'market_gemini' not in st.session_state:
             market_prompt = get_market_summary_prompt(df_results)
-            
             col1, col2 = st.columns(2)
-            
             with col1:
                 st.markdown("### 🧠 OpenAI (Strategist)")
                 with st.spinner("OpenAI 분석 중..."):
-                    openai_res = call_openai_api(market_prompt)
-                    st.markdown(openai_res)
-            
+                    st.session_state['market_openai'] = call_openai_api(market_prompt)
             with col2:
                 st.markdown("### 🌟 Gemini (Analyst)")
                 with st.spinner("Gemini 분석 중..."):
-                    gemini_res = call_gemini_api(market_prompt)
-                    st.markdown(gemini_res)
+                    st.session_state['market_gemini'] = call_gemini_api(market_prompt)
+            st.rerun()
 
-    # 2. 개별 종목 심층 분석 탭
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### 🧠 OpenAI (Strategist)")
+            st.markdown(st.session_state['market_openai'])
+        with col2:
+            st.markdown("### 🌟 Gemini (Analyst)")
+            st.markdown(st.session_state['market_gemini'])
+
+        if st.button("🔄 재분석", use_container_width=True):
+            del st.session_state['market_openai']
+            del st.session_state['market_gemini']
+            st.rerun()
+
+    # 2. 펀더멘털 비교 분석 탭
+    with tab_fundamental:
+        st.subheader("💼 펀더멘털 6개 지표 AI 비교 분석")
+
+        if df_fundamental.empty:
+            st.warning("펀더멘털 데이터가 없습니다. '펀더멘털 분석' 항목을 체크 후 새로고침하세요.")
+        else:
+            if st.button("🚀 펀더멘털 비교 분석 실행", type="primary", use_container_width=True,
+                         key="btn_fund_analysis"):
+                st.session_state.pop('fund_openai', None)
+                st.session_state.pop('fund_gemini', None)
+
+            if 'fund_openai' not in st.session_state or 'fund_gemini' not in st.session_state:
+                fund_prompt = get_fundamental_comparison_prompt(df_fundamental, df_cagr)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("### 🧠 OpenAI (Strategist)")
+                    with st.spinner("OpenAI 분석 중..."):
+                        st.session_state['fund_openai'] = call_openai_api(fund_prompt)
+                with col2:
+                    st.markdown("### 🌟 Gemini (Analyst)")
+                    with st.spinner("Gemini 분석 중..."):
+                        st.session_state['fund_gemini'] = call_gemini_api(fund_prompt)
+                st.rerun()
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### 🧠 OpenAI (Strategist)")
+                st.markdown(st.session_state['fund_openai'])
+            with col2:
+                st.markdown("### 🌟 Gemini (Analyst)")
+                st.markdown(st.session_state['fund_gemini'])
+
+    # 3. 개별 종목 심층 분석 탭
     with tab_stock:
         st.subheader("🔍 개별 자산 Deep Dive")
-        
-        # 종목 선택 (점수 높은 순으로 정렬)
+
+        # 자동 실행: 모든 종목 분석 결과가 없을 때
+        if 'stock_analysis' not in st.session_state:
+            st.session_state['stock_analysis'] = {}
+
+        missing = [t for t in df_results['Ticker'].tolist()
+                   if t not in st.session_state['stock_analysis']]
+
+        if missing:
+            progress = st.progress(0, text="전체 종목 AI 분석 중...")
+            for i, ticker in enumerate(missing):
+                row = df_results[df_results['Ticker'] == ticker].iloc[0]
+                fund_data = None
+                if not df_fundamental.empty and ticker in df_fundamental['Ticker'].values:
+                    fund_data = df_fundamental[df_fundamental['Ticker'] == ticker].iloc[0].to_dict()
+                cagr_data = None
+                if not df_cagr.empty and ticker in df_cagr['Ticker'].values:
+                    cagr_data = df_cagr[df_cagr['Ticker'] == ticker].iloc[0].to_dict()
+
+                prompt = get_single_stock_prompt(row.to_dict(), fund_data, cagr_data)
+                openai_res = call_openai_api(prompt)
+                gemini_res = call_gemini_api(prompt)
+                st.session_state['stock_analysis'][ticker] = {
+                    'openai': openai_res,
+                    'gemini': gemini_res
+                }
+                progress.progress((i + 1) / len(missing),
+                                  text=f"분석 완료: {ticker} ({i+1}/{len(missing)})")
+            progress.empty()
+            st.rerun()
+
+        # 종목 선택 후 결과 표시
         sorted_tickers = df_results['Ticker'].tolist()
-        selected_ticker = st.selectbox("분석할 종목을 선택하세요:", sorted_tickers)
-        
-        if st.button(f"🚀 {selected_ticker} 심층 분석 실행", type="primary", use_container_width=True):
-            # 선택된 종목 데이터 준비
-            row = df_results[df_results['Ticker'] == selected_ticker].iloc[0]
-            
-            # 펀더멘털 데이터
-            fund_data = None
-            if not df_fundamental.empty and selected_ticker in df_fundamental['Ticker'].values:
-                fund_data = df_fundamental[df_fundamental['Ticker'] == selected_ticker].iloc[0].to_dict()
-            
-            # 성장률(CAGR) 데이터
-            cagr_data = None
-            if not df_cagr.empty and selected_ticker in df_cagr['Ticker'].values:
-                cagr_data = df_cagr[df_cagr['Ticker'] == selected_ticker].iloc[0].to_dict()
-            
-            # 프롬프트 생성
-            stock_prompt = get_single_stock_prompt(row.to_dict(), fund_data, cagr_data)
-            
-            # Dual Engine 실행
+        selected_ticker = st.selectbox("종목을 선택하세요:", sorted_tickers)
+
+        if selected_ticker in st.session_state['stock_analysis']:
+            result = st.session_state['stock_analysis'][selected_ticker]
             col1, col2 = st.columns(2)
-            
             with col1:
                 st.markdown(f"### 🧠 OpenAI 분석 ({selected_ticker})")
-                with st.spinner("OpenAI가 차트와 장부를 분석 중..."):
-                    stock_res_openai = call_openai_api(stock_prompt)
-                    st.success("OpenAI 분석 완료")
-                    st.markdown(stock_res_openai)
-            
+                st.markdown(result['openai'])
             with col2:
                 st.markdown(f"### 🌟 Gemini 분석 ({selected_ticker})")
-                with st.spinner("Gemini가 데이터를 크로스체크 중..."):
-                    stock_res_gemini = call_gemini_api(stock_prompt)
-                    st.success("Gemini 분석 완료")
-                    st.markdown(stock_res_gemini)
+                st.markdown(result['gemini'])
+
+        if st.button("🔄 전체 재분석", use_container_width=True, key="btn_stock_refresh"):
+            st.session_state.pop('stock_analysis', None)
+            st.rerun()
 
 
 # ==================== 투자 전략 요약 ====================
